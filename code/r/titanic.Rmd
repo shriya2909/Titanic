@@ -1,0 +1,12 @@
+---
+title: "Titanic"
+author: "Shriya Rai"
+date: "4 November 2018"
+output: html_document
+---
+
+```{r}
+library(alr4)
+train <- read.csv("raw/train.csv", stringsAsFactors=FALSE)
+test <- read.csv("raw/test.csv", stringsAsFactors=FALSE)
+```

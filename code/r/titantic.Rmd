@@ -1,0 +1,68 @@
+---
+title: "Kaggle Homework"
+author: "Zachary Levonian"
+date: "10/25/2018"
+output: pdf_document
+---
+
+```{r}
+library(alr4)
+#test change commit : shriya
+```
+
+```{r}
+train <- read.csv("raw/train.csv", stringsAsFactors=FALSE)
+test <- read.csv("raw/test.csv", stringsAsFactors=FALSE)
+```
+
+```{r}
+test$Survived = 2
+df <- rbind(train, test)
+```
+
+
+# Build factors
+
+```{r}
+df$fSex = factor(df$Sex)
+df$fEmbarked = factor(df$Embarked)
+```
+
+```{r}
+train <- df[df$Survived != 2, ]
+test <- df[df$Survived == 2, ]
+```
+
+
+# Data Exploration
+
+```{r}
+pairs(train[c("fSex", "fEmbarked", "Pclass", "Age", "SibSp", "Parch", "Fare", "Survived")])
+```
+
+
+```{r}
+md <- glm(Survived ~ fSex + fEmbarked, family="binomial", data=train)
+summary(md)
+```
+
+
+```{r}
+# predict on the test set
+y_pred <- predict(md, test, type="response")
+hist(y_pred)
+```
+
+```{r}
+# save the predictions to a file that can be submitted to Kaggle
+test$Survived = as.numeric(y_pred > 0.5)
+toWrite <- test[,c("PassengerId", "Survived")]
+write.table(toWrite, file="derived/modelPredictions.csv", 
+            row.names=FALSE, col.names=TRUE, 
+            sep=",", quote=FALSE)
+```
+
+
+##
+
+

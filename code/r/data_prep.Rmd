@@ -1,0 +1,301 @@
+---
+title: "Data Preparation"
+author: "Zachary Levonian"
+date: "11/02/2018"
+output: pdf_document
+bibliography: "titanic kaggle project.bib"
+csl: acm-sigchi-proceedings.csl
+---
+
+```{r}
+library(alr4)
+library(mice)  # for multiple imputation
+library(BaylorEdPsych)  # For Little's MCAR test
+library(polycor)  # To compute correlation between heterogenous variables
+library(plotrix)  # For side-along histograms
+library(caret)  # For Cross Validation
+library(glmnet)  # For generalized linear models
+library(xgboost)  # For gradient-boosted decision trees
+```
+
+# Load data
+
+```{r}
+train <- read.csv("../../data/raw/train.csv", stringsAsFactors=FALSE, na.strings = c("NA", ""))
+test <- read.csv("../../data/raw/test.csv", stringsAsFactors=FALSE, na.strings = c("NA", ""))
+```
+
+Combine the data into a single dataframe to make it easier to work with.  I denote data in the test set with `Survived = 2`.
+
+```{r}
+test$Survived = 2
+df <- rbind(train, test)
+```
+
+# Load other derived data
+
+```{r}
+new_cols <- read.csv("../../data/derived/levon003_new_cols.csv", stringsAsFactors=TRUE)
+df <- merge(df, new_cols, by="PassengerId", all.y=TRUE, all.x=FALSE)
+```
+
+
+# Data exploration
+
+## Build factors from data
+
+```{r}
+df$fSex = factor(df$Sex)
+df$fEmbarked = factor(df$Embarked)
+```
+
+## High-level summaries and visualization
+
+```{r}
+df_labeled$Survived
+pairs(df_labeled[c("Age", "SibSp", "Parch", "Fare", "Survived")], panel=panel.smooth)
+```
+
+## Missing data
+
+```{r}
+sapply(df, function(x) sum(is.na(x)))
+```
+
+It looks like the only data that's missing is Age and Cabin data. In addition, a single instance of the missing Fare data (in the test set) and two instances of the Embarked data are missing.
+
+### Fare missing data
+
+```{r}
+# print the row where Fare info is missing
+df[is.na(df["Fare"])]
+```
+
+We need to impute this value, but as there's only a single missing value it's impossible to determine if the data is missing at random or not.
+
+We will assume the data is missing at random and impute a value for Thomas Storey's fare using `mice`.
+
+It is imputed alongside the Age data below.
+
+### fEmbarked missing data
+
+Is imputed alongside the Age data below.
+
+### Age missing data
+
+263 passengers (20%) are missing age data.
+
+First, we want to determine if the data are missing at random (MAR) or completely at random (MCAR).
+
+```{r}
+age_little_df <- df[,c("fSex", "fEmbarked", "Pclass", "Age", "SibSp", "Parch", "Survived")]
+mcar <- LittleMCAR(age_little_df)
+mcar$missing.patterns
+mcar$amount.missing
+mcar$p.value
+```
+
+Little's MCAR test generates a test statistic against the null hypothesis that the missing data are MCAR.  Thus, we have evidence that we ought to reject the null hypothesis and the missing age data are MAR @enders_applied_2010.
+
+```{r}
+age_little_df <- df[,c("fSex", "fEmbarked", "Pclass", "SibSp", "Parch", "Fare", "Survived", "name_title", "name_word_length", "name_char_length", "cabin_first_letter", "ticket_category")]
+age_little_df$AgeMissing = as.numeric(is.na(df["Age"]))
+hetcor(age_little_df)
+```
+
+A missing age value is correlated positively with passenger class ($r=0.2082$) and negatively with point of embarkment ($r=-0.1672$) and passenger fare ($r=-0.1306$).  All other correlations are < 0.1.  
+
+I'm inclined to think that the true mediator of missing age (among the covariates in the dataset) is passenger class, which embarkment and fare both correlate with.
+
+```{r}
+t.test(df[is.na(df["Age"]),"Fare"], df[!is.na(df["Age"]),"Fare"])
+```
+
+We use a univariate $t$-test to evaluate the fare, since it's numeric, and at the 99% confidence level we reject the null hypothesis which suggests the missing data are MAR (rather than MCAR).
+
+Now, we turn to tangible estimation of the missing data estimates.
+
+```{r}
+age_df <- df[,c("Age", "fSex", "fEmbarked", "Pclass", "SibSp", "Parch", "Fare", "Survived", "name_title", "name_word_length", "cabin_first_letter")]
+imp <- mice(age_df, print=FALSE, m=20, seed=1, maxit=20)
+imputed_df <- complete(imp)
+
+reg_imp <- mice(age_df, print=FALSE, m=20, seed=1, maxit=20, method="norm.nob")
+reg_imputed_age <- complete(reg_imp)$Age
+
+#plot(imp)
+#fit <- with(imp, lm(Survived ~ Age))
+#pool(fit)
+```
+
+```{r}
+age_pre <- imp$data$Age
+
+mean_imputed <- age_pre
+mean_imputed[is.na(mean_imputed)] = mean(mean_imputed, na.rm=TRUE)
+
+# plot of the change in the distribution of Age 
+# after imputation of NA values
+colors=c("grey30", "grey50", "grey70", "grey90")
+multhist(list(imp$data$Age, mean_imputed, reg_imputed_age, complete(imp)$Age), xlab="Passenger Age", ylab="Count", col=colors, legend.text=TRUE)
+legend(55, 400, legend=c("Missing Excluded", "Mean Imputation", "Stochastic Reg. Imp.", "Predictive Mean Matching"), col=colors, lty=c(1,1,1,1))
+```
+
+
+Following the guidance of @buuren_flexible_2018, we utilize multiple imputation with $m=20$ imputations.
+
+TODO I should compare the performance of models where Age is imputed vs when it is removed via complete case analysis.
+
+### Cabin missing data
+
+I choose not to handle the Cabin data right now, since I think it needs a more elaborate extraction into multiple additional columns.
+
+We could add a binary indicator variable for the presence of Cabin, but such indicator variables can result in biased regression estimates @buuren_flexible_2018.
+
+### Overwrite the original dataframe with the imputed values
+
+```{r}
+df$fEmbarked <- imputed_df$fEmbarked
+df$Age <- imputed_df$Age
+df$Fare <- imputed_df$Fare
+sapply(df, function(x) sum(is.na(x)))
+```
+
+
+## Save the cleaned-up data
+
+Now, we save all the columns to be used as potential features to a file.
+
+```{r}
+toWrite <- df[,c("PassengerId", "Survived", "fSex", "fEmbarked", "Pclass", "Age", "SibSp", "Parch", "Fare", "name_title", "name_word_length", "name_char_length", "cabin_first_letter", "ticket_category")]
+write.table(toWrite, file="../../data/derived/factorized_data.csv",
+            row.names=FALSE, col.names=TRUE, 
+            sep=",", quote=FALSE)
+```
+
+# Model comparison between different age imputations
+
+```{r}
+df <- read.csv("../../data/derived/factorized_data.csv", stringsAsFactors=TRUE)
+df$AgeOriginal <- imp$data$Age
+df$AgeMean <- mean_imputed
+df$AgeReg <- reg_imputed_age
+df$AgePmm <- complete(imp)$Age
+
+df_labeled <- df[df$Survived != 2, ]
+df_labeled$Survived = factor(df_labeled$Survived)
+df_unlabeled <- df[df$Survived == 2, ]
+
+classes <- df_labeled[, "Survived"]
+#survived <- df_labeled$Survived
+
+k = 50
+# for (age in list(df_labeled$AgeOriginal, df_labeled$AgeMean, df_labeled$AgeReg, df_labeled$AgePmm)) {
+#   accs <- vector("list", k)
+#   cv_splits <- createFolds(classes, k = k, returnTrain = TRUE)
+#   i <- 1
+#   for (cv_split in cv_splits) {
+#     age_input <- age[cv_split]
+#     df_train <- df_labeled[cv_split,]
+#     md <- with(df_train, glm(Survived ~ AgePmm + fSex + fEmbarked + Pclass + SibSp + Parch + Fare + name_title + name_word_length:name_char_length + cabin_first_letter + ticket_category, family="binomial"))
+#     df_test <- df_labeled[-cv_split,]
+#     test_pred_prob <- predict(md, newdata=df_test)
+#     test_pred <- as.numeric(test_pred_prob > 0.5)
+#     test_pred[is.na(test_pred)] = 0
+#     test_pred <- factor(test_pred, levels=c("0", "1"))
+#     #print(length(test_pred))
+#     #print(length(survived[-cv_split]))
+#     acc <- confusionMatrix(test_pred, survived[-cv_split])$overall["Accuracy"]
+#     accs[[i]] <- acc
+#     i <- i + 1
+#   }
+#   print(mean(as.numeric(accs)))
+# }
+
+accs <- vector("list", k)
+cv_splits <- createFolds(classes, k = k, returnTrain = TRUE)
+i <- 1
+for (cv_split in cv_splits) {
+  age_input <- age[cv_split]
+  df_train <- df_labeled[cv_split,]
+  md <- with(df_train, glm(Survived ~ AgeOriginal + fSex + fEmbarked + Pclass + SibSp + Parch + Fare + name_title + name_char_length + cabin_first_letter + ticket_category, family="binomial"))
+  df_test <- df_labeled[-cv_split,]
+  test_pred_prob <- predict(md, newdata=df_test)
+  test_pred <- as.numeric(test_pred_prob > 0.5)
+  test_pred[is.na(test_pred)] = 0
+  test_pred <- factor(test_pred, levels=c("0", "1"))
+  #print(length(test_pred))
+  #print(length(survived[-cv_split]))
+  acc <- confusionMatrix(test_pred, df_test$Survived)$overall["Accuracy"]
+  accs[[i]] <- acc
+  i <- i + 1
+}
+print("AgeOriginal")
+print(mean(as.numeric(accs)))
+
+accs <- vector("list", k)
+cv_splits <- createFolds(classes, k = k, returnTrain = TRUE)
+i <- 1
+for (cv_split in cv_splits) {
+  age_input <- age[cv_split]
+  df_train <- df_labeled[cv_split,]
+  md <- with(df_train, glm(Survived ~ AgeMean + fSex + fEmbarked + Pclass + SibSp + Parch + Fare + name_title + name_char_length + cabin_first_letter + ticket_category, family="binomial"))
+  df_test <- df_labeled[-cv_split,]
+  test_pred_prob <- predict(md, newdata=df_test)
+  test_pred <- as.numeric(test_pred_prob > 0.5)
+  test_pred[is.na(test_pred)] = 0
+  test_pred <- factor(test_pred, levels=c("0", "1"))
+  #print(length(test_pred))
+  #print(length(survived[-cv_split]))
+  acc <- confusionMatrix(test_pred, df_test$Survived)$overall["Accuracy"]
+  accs[[i]] <- acc
+  i <- i + 1
+}
+print("AgeMean")
+print(mean(as.numeric(accs)))
+
+accs <- vector("list", k)
+cv_splits <- createFolds(classes, k = k, returnTrain = TRUE)
+i <- 1
+for (cv_split in cv_splits) {
+  age_input <- age[cv_split]
+  df_train <- df_labeled[cv_split,]
+  md <- with(df_train, glm(Survived ~ AgeReg + fSex + fEmbarked + Pclass + SibSp + Parch + Fare + name_title + name_char_length + cabin_first_letter + ticket_category, family="binomial"))
+  df_test <- df_labeled[-cv_split,]
+  test_pred_prob <- predict(md, newdata=df_test)
+  test_pred <- as.numeric(test_pred_prob > 0.5)
+  test_pred[is.na(test_pred)] = 0
+  test_pred <- factor(test_pred, levels=c("0", "1"))
+  #print(length(test_pred))
+  #print(length(survived[-cv_split]))
+  acc <- confusionMatrix(test_pred, df_test$Survived)$overall["Accuracy"]
+  accs[[i]] <- acc
+  i <- i + 1
+}
+print("AgeReg")
+print(mean(as.numeric(accs)))
+  
+accs <- vector("list", k)
+cv_splits <- createFolds(classes, k = k, returnTrain = TRUE)
+i <- 1
+for (cv_split in cv_splits) {
+  age_input <- age[cv_split]
+  df_train <- df_labeled[cv_split,]
+  md <- with(df_train, glm(Survived ~ AgePmm + fSex + fEmbarked + Pclass + SibSp + Parch + Fare + name_title + name_char_length + cabin_first_letter + ticket_category, family="binomial"))
+  df_test <- df_labeled[-cv_split,]
+  test_pred_prob <- predict(md, newdata=df_test)
+  test_pred <- as.numeric(test_pred_prob > 0.5)
+  test_pred[is.na(test_pred)] = 0
+  test_pred <- factor(test_pred, levels=c("0", "1"))
+  #print(length(test_pred))
+  #print(length(survived[-cv_split]))
+  acc <- confusionMatrix(test_pred, df_test$Survived)$overall["Accuracy"]
+  accs[[i]] <- acc
+  i <- i + 1
+}
+print("AgePmm")
+print(mean(as.numeric(accs)))
+```
+
+
+# References

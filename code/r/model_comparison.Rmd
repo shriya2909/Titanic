@@ -1,0 +1,235 @@
+---
+title: "Data Preparation"
+author: "Zachary Levonian"
+date: "11/02/2018"
+output: pdf_document
+bibliography: "titanic kaggle project.bib"
+csl: acm-sigchi-proceedings.csl
+---
+
+```{r}
+library(alr4)
+library(mice)  # for multiple imputation
+library(BaylorEdPsych)  # For Little's MCAR test
+library(polycor)  # To compute correlation between heterogenous variables
+library(plotrix)  # For side-along histograms
+library(caret)  # For Cross Validation
+library(glmnet)  # For generalized linear models
+library(xgboost)  # For gradient-boosted decision trees
+```
+
+# Train a variety of models
+
+```{r}
+df <- read.csv("../../data/derived/factorized_data.csv", stringsAsFactors=TRUE)
+```
+
+
+```{r}
+df_labeled <- df[df$Survived != 2, ]
+df_labeled$Survived = factor(df_labeled$Survived)
+df_unlabeled <- df[df$Survived == 2, ]
+# I was removing this column, but it led to out-of-order columns between labeled and unlabeled data
+#df_unlabeled <- df_unlabeled[, !(colnames(df_unlabeled) %in% c("Survived"))]
+```
+
+## GBDT w/ xgboost
+
+```{r}
+# Get CV splits
+classes <- df_labeled[, "Survived"]
+predictors <- df_labeled[, -match(c("Survived", "PassengerId"), colnames(df))]
+
+train_set <- createDataPartition(classes, p = 0.8, list = FALSE)
+
+train_predictors <- predictors[train_set, ]
+train_classes <- classes[train_set]
+test_predictors <- predictors[-train_set, ]
+test_classes <- classes[-train_set]
+
+set.seed(1)
+cv_splits <- createFolds(classes, k = 10, returnTrain = TRUE)
+
+df_train <- df_labeled[train_set, ]
+df_test <- df_labeled[-train_set, ]
+
+X_sparse <- sparse.model.matrix(Survived~., data=df_train[, -match(c("PassengerId"), colnames(df))])
+xgboost_label <- as.numeric(df_train$Survived) - 1
+
+dtrain <- xgb.DMatrix(data = X_sparse, label=xgboost_label)
+dlabeled_train <- xgb.DMatrix(data = data.matrix(df_labeled[train_set, -match(c("PassengerId", "Survived"), colnames(df))]),
+                              label=as.numeric(df_train$Survived) - 1)
+bst <- xgboost(data = dlabeled_train, max_depth = 4,
+               eta = 1, nthread = 8, nrounds = 10, objective = "binary:logistic")
+
+importance <- xgb.importance(feature_names = colnames(X_sparse), model = bst)
+head(importance, n=10)
+xgb.plot.importance(importance_matrix = importance)
+
+test_sparse <- sparse.model.matrix(Survived~., data=df_test[, -match(c("PassengerId"), colnames(df))])
+dtest <- xgb.DMatrix(data = test_sparse, label=as.numeric(df_test$Survived) - 1)
+dlabeled_test <- xgb.DMatrix(data = data.matrix(df_labeled[-train_set, -match(c("PassengerId", "Survived"), colnames(df))]),
+                              label=as.numeric(df_test$Survived) - 1)
+y_pred <- predict(bst, dlabeled_test)
+table(y_pred > 0.5)
+
+correct_count <- sum(as.numeric(y_pred > 0.5) == df_test$Survived)
+correct_count / length(df_test$Survived)
+```
+
+```{r}
+# Adapted from https://www.kaggle.com/nagsdata/simple-r-xgboost-caret-kernel
+trctrl <- trainControl(method = "cv", number = 50, allowParallel = TRUE)
+tune_grid <- expand.grid(nrounds=c(50,200,300),
+                         max_depth = c(2,3,4,6,8),
+                         eta = c(0.01, 0.05, 1),
+                         gamma = c(0.01),
+                         colsample_bytree = c(0.75),
+                         subsample = c(0.50),
+                         min_child_weight = c(0))
+
+rf_fit <- train(Survived ~., data = df_labeled[train_set, -match(c("PassengerId"), colnames(df))], 
+                method = "xgbTree",
+                trControl=trctrl,
+                tuneGrid = tune_grid,
+                tuneLength = 10)
+rf_fit
+
+# Computed accuracy on the held out test set
+pred_df_test <- predict(rf_fit, df_labeled[-train_set, -match(c("PassengerId", "Survived"), colnames(df))])
+sum(pred_df_test == df_test$Survived) / length(df_test$Survived)
+confusionMatrix(pred_df_test,df_test$Survived)
+
+# These parameters were set from rf_fit$bestTune
+tune_grid_full <- expand.grid(nrounds=c(200),
+                         max_depth = c(8),
+                         eta = c(0.05),
+                         gamma = c(0.01),
+                         colsample_bytree = c(0.75),
+                         subsample = c(0.50),
+                         min_child_weight = c(0))
+rf_fit_full <- train(Survived ~., data = df_labeled[, -match(c("PassengerId"), colnames(df))], 
+                method = "xgbTree",
+                trControl=trctrl,
+                tuneGrid = tune_grid_full,
+                tuneLength = 10)
+rf_fit_full
+# Evaluate the within-set accuracy to check for severe overfitting
+confusionMatrix(predict(rf_fit_full, df_labeled[, -match(c("PassengerId", "Survived"), colnames(df))]), df_labeled$Survived)
+
+
+df_unlabeled$Survived = predict(rf_fit_full, df_unlabeled)
+toWrite <- df_unlabeled[,c("PassengerId", "Survived")]
+write.table(toWrite, file="../../data/derived/xgboostCvModelPredictions.csv", 
+            row.names=FALSE, col.names=TRUE, 
+            sep=",", quote=FALSE)
+```
+
+
+```{r}
+dunlabeled <- xgb.DMatrix(data = data.matrix(df_unlabeled[, -match(c("PassengerId", "Survived"), colnames(df))]))
+pred_unlabeled <- predict(bst, newdata = dunlabeled)
+df_unlabeled$Survived <- as.numeric(pred_unlabeled > 0.5)
+
+toWrite <- df_unlabeled[,c("PassengerId", "Survived")]
+write.table(toWrite, file="../../data/derived/xgboostModelPredictions.csv", 
+            row.names=FALSE, col.names=TRUE, 
+            sep=",", quote=FALSE)
+```
+
+## GLM w/ glmnet
+
+```{r}
+# Adapted from http://www.milanor.net/blog/cross-validation-for-predictive-analytics-using-r/
+
+# Get CV splits
+classes <- df_labeled[, "Survived"]
+predictors <- df_labeled[, -match(c("Survived", "PassengerId"), colnames(df))]
+
+train_set <- createDataPartition(classes, p = 0.8, list = FALSE)
+
+train_predictors <- predictors[train_set, ]
+train_classes <- classes[train_set]
+test_predictors <- predictors[-train_set, ]
+test_classes <- classes[-train_set]
+
+set.seed(1)
+cv_splits <- createFolds(classes, k = 10, returnTrain = TRUE)
+
+df_train <- df_labeled[train_set, ]
+df_test <- df_labeled[-train_set, ]
+
+glmnet_grid <- expand.grid(alpha = c(0, 0.01, .1, .5, .9, 0.99, 1),
+                           lambda = seq(.001, .4, length = 20))
+glmnet_ctrl <- trainControl(method = "cv", number = 20)
+glmnet_fit <- train(Survived ~ ., data = df_labeled[train_set, -match(c("PassengerId"), colnames(df))],
+                    method = "glmnet",
+                    preProcess = c("center", "scale"),
+                    tuneGrid = glmnet_grid,
+                    trControl = glmnet_ctrl)
+glmnet_fit
+```
+
+```{r}
+pred_classes <- predict(glmnet_fit, newdata = df_labeled[-train_set, -match(c("PassengerId"), colnames(df))], type="prob")
+multhist(list(pred_classes$`0`, pred_classes$`1`), xlab="Survived Probability", ylab="Count")
+
+# Compute accuracy on the held-out test set
+sum(predict(glmnet_fit, newdata = df_test) == df_test$Survived) / length(df_test$Survived)
+confusionMatrix(predict(glmnet_fit, newdata = df_test), df_test$Survived)
+
+```
+
+```{r}
+glmnet_ctrl <- trainControl(method = "cv", number = 20)
+glmnet_fit <- train(Survived ~ ., data = df_labeled[train_set, -match(c("PassengerId"), colnames(df))],
+                    method = "glmnet",
+                    preProcess = c("center", "scale"),
+                    tuneGrid = glmnet_grid,
+                    trControl = glmnet_ctrl)
+
+
+glmnet_full_fit <- train(Survived ~ ., data = df_labeled[, -match(c("PassengerId"), colnames(df))],
+                    method = "glmnet", family="binomial",
+                    preProcess = c("center", "scale"),
+                    tuneGrid=expand.grid(alpha=c(0.5), lambda=c(0.022)),
+                    trControl = glmnet_ctrl)
+sum(predict(glmnet_full_fit, newdata = df_labeled) == df_labeled$Survived) / length(df_labeled$Survived)
+confusionMatrix(predict(glmnet_full_fit, newdata = df_labeled), df_labeled$Survived)
+
+pred_unlabeled <- predict(glmnet_full_fit, newdata = df_unlabeled)
+df_unlabeled$Survived <- pred_unlabeled
+toWrite <- df_unlabeled[,c("PassengerId", "Survived")]
+write.table(toWrite, file="../../data/derived/glmModelPredictions.csv", 
+            row.names=FALSE, col.names=TRUE, 
+            sep=",", quote=FALSE)
+```
+
+## Logistic Regression
+
+```{r}
+md <- glm(Survived ~ fSex + fEmbarked + Pclass + Age + SibSp + Parch + Fare + name_title + name_word_length:name_char_length + cabin_first_letter + ticket_category
+          + fSex:Age, family="binomial", data=df_labeled)
+summary(md)
+```
+
+
+```{r}
+# predict on the test set
+y_pred <- predict(md, df_unlabeled, type="response")
+hist(y_pred)
+```
+
+```{r}
+# save the predictions to a file that can be submitted to Kaggle
+df_unlabeled$Survived = as.numeric(y_pred > 0.5)
+# while there shouldn't be NAs in the test output, 
+# here we apply a nasty hack to ensure any NAs are numeric in the output
+df_unlabeled[is.na(df_unlabeled)] <- 0
+toWrite <- df_unlabeled[,c("PassengerId", "Survived")]
+write.table(toWrite, file="../../data/derived/logRegModelPredictions.csv", 
+            row.names=FALSE, col.names=TRUE, 
+            sep=",", quote=FALSE)
+```
+
+# References

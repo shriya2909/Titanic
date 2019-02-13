@@ -1,0 +1,87 @@
+---
+title: "Project_Fatemeh Nosrat"
+author: "Fatemeh Nosrat"
+date: "11/8/2018"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r}
+
+library(dummies)
+Mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+train <- read.csv(file="/Users/fatemehnosrat/Downloads/train.csv",header = TRUE, na.strings=c("",".","NA"))
+train$Embarked[is.na(train$Embarked)]<-Mode(train$Embarked)
+#train$Sex <- as.integer(train$Sex)
+View(train)
+#train$Embarked <- as.integer(train$Embarked)
+test <- read.csv(file="/Users/fatemehnosrat/Downloads/test.csv",header = TRUE, na.strings=c("",".","NA"))
+#test$Sex <- as.integer(test$Sex)
+#test$Embarked <- as.integer(test$Embarked)
+
+train_w_age <- subset(train, !(is.na(train$Age)))
+train_wo_age <- subset(train, is.na(train$Age))
+
+#scatterplot3d(train$Pclass,train$Survived,train$Age)
+#abline(fit)
+#aggregate( train$Survived~ train$Pclass, train, sum)
+
+#table(train$Pclass,train$Survived, mean(train$Age))
+fit<-lm(Age~Pclass+Survived+SibSp,data= train)
+summary(fit)
+
+train_wo_age$Age <- round(predict(fit,train_wo_age))
+updated_age<-merge(train_w_age,train_wo_age,all=TRUE)
+View(updated_age)
+
+drops <- c("Name", "Ticket", "Cabin")
+Cleansed_data<- updated_age[,!(names(updated_age) %in% drops)]
+
+Cleansed<-dummy.data.frame(Cleansed_data,sep="_")
+
+View(Cleansed)
+
+pairs(~Age + Pclass + Survived + SibSp + Fare + Sex_female + Sex_male, data=Cleansed)
+
+
+FitModel1 <- lm(Survived ~ Pclass + Age + SibSp + Fare + Sex_female + Sex_male  + Pclass * Age + Pclass * SibSp + Pclass * Fare + Pclass * Sex_female +Pclass * Sex_male + Age * SibSp + Age * Sex_female + Age * Fare + Age * Sex_male + SibSp * Fare + SibSp * Sex_female +SibSp* Sex_male + Fare * Sex_male  + Fare * Sex_female + Sex_male * Sex_female+ Pclass * Age * SibSp + Pclass * Age * Sex_female+ Pclass * Age * Sex_male+ Pclass * Age * Fare + Pclass * SibSp * Fare+ Pclass * SibSp * Sex_female +Pclass * SibSp * Sex_male+ Pclass * Fare * Sex_female+Pclass * Fare * Sex_male+ Pclass * Sex_male * Sex_female+ Age * SibSp * Sex_female
++Age * SibSp * Sex_male+Age*Sex_male*Sex_male+ Age * Fare* Sex_female+Age* Fare* Sex_male
+ +Age * SibSp * Fare+SibSp*Fare*Sex_male +SibSp*Fare*Sex_female+SibSp*Sex_male*Sex_female +Fare*Sex_male*Sex_female+  Pclass * Age * SibSp * Sex_female+Pclass * Age * SibSp * Fare+  Pclass * Age * SibSp * Sex_male +  Pclass * Age * Fare * Sex_female+  Pclass * Age * Fare * Sex_male+Pclass*Fare*SibSp*Sex_male+Pclass*Fare*SibSp*Sex_female+Pclass*SibSp*Sex_female*Sex_male+Pclass*Fare*Sex_male*Sex_female+Pclass*Age*Sex_female*Sex_male + Age * SibSp * Fare * Sex_female + Age * SibSp * Fare * Sex_male+ Age * SibSp * Sex_male * Sex_female+ Age * Sex_male * Fare * Sex_female + Fare * Sex_male* Sex_female* SibSp+Fare * Sex_male* Sex_female* Pclass *Age+Fare * Sex_male* Sex_female* SibSp *Pclass+Fare * Sex_male* Sex_female* SibSp *Age+Fare * Sex_male* Pclass* SibSp *Age+Fare * Pclass* Sex_female* SibSp *Age+Pclass* Sex_female* SibSp *Age *Sex_male*Fare, data = Cleansed)
+summary(FitModel1)
+
+FitModel1 <- lm(Survived ~ Pclass + Age + SibSp + Fare + Sex_female + Sex_male  + Pclass * Age + Pclass * SibSp + Pclass * Fare + Pclass * Sex_female +Pclass * Sex_male + Age * SibSp   , data = Cleansed)
+summary(FitModel1)
+
+## P-value for the Age*SibSp is not significant, so the NH hypothesis is not rejected.
+FitModel2 <- lm(Survived ~ Pclass + Age + SibSp + Fare + Sex_female + Sex_male  + Pclass * Age + Pclass * SibSp + Pclass * Fare + Pclass * Sex_female +Pclass * Sex_male    , data = Cleansed)
+summary(FitModel2)
+
+##The p-value for the Pclass * Fare is not significant, so the NH hypothesis is not rejected.
+FitModel3 <- lm(Survived ~ Pclass + Age + SibSp + Fare + Sex_female + Sex_male  + Pclass * Age + Pclass * SibSp  + Pclass * Sex_female     , data = Cleansed)
+summary(FitModel3)
+
+##The p-value for the Pclass * Age is not significant, so the NH hypothesis is not rejected.
+FitModel4 <- lm(Survived ~ Pclass + Age + SibSp + Fare + Sex_female + Sex_male  + Pclass * SibSp+Pclass * Sex_female, data = Cleansed)
+summary(FitModel4)
+
+## The p-value for the Pclass * SibSp is not signifacant, so the NH hypothesis is not rejected.
+FitModel5 <- lm(Survived ~ Pclass + Age + SibSp + Fare + Sex_female + Sex_male  +Pclass * Sex_female     , data = Cleansed)
+summary(FitModel5)
+
+## The P-value for the Pclass * SibSp is not significant, so the NH hypothesis is not rejected.
+FitModel6 <- lm(Survived ~ Pclass + Age + SibSp + Fare + Sex_female   +Pclass * Sex_female     , data = Cleansed)
+summary(FitModel6)
+##Sex_male is NA.
+
+##The p-value for Fare is not significant, so the NH hypothesis is not rejected.
+FitModel7 <- lm(Survived ~ Pclass + Age + SibSp  + Sex_female   +Pclass * Sex_female     , data = Cleansed)
+summary(FitModel7)
+
+```
+there is only interaction between Pclass:Sex_female
+

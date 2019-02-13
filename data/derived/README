@@ -1,0 +1,4 @@
+Derived data products go here.
+
+In other words, if you write a script that produces a new column/covariate from the raw data, one can write it out here for easy loading by other scripts or team members.
+

@@ -1,0 +1,89 @@
+---
+title: "Titanic Challenge"
+author: "Harshit Jain"
+date: "11/5/2018"
+output: pdf_document
+---
+
+```{r}
+Mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+} 
+
+train <- read.csv("/Users/harshitjain/train.csv",header = TRUE, na.strings=c("",".","NA"))
+train$Embarked[is.na(train$Embarked)]<-Mode(train$Embarked)
+#train$Sex <- as.integer(train$Sex)
+#View(train)
+#train$Embarked <- as.integer(train$Embarked)
+test <- read.csv("/Users/harshitjain/test.csv",header = TRUE, na.strings=c("",".","NA"))
+test$Survived<-2
+View(test)
+#test$Sex <- as.integer(test$Sex)
+#test$Embarked <- as.integer(test$Embarked)
+
+train_w_age <- subset(train, !(is.na(train$Age)))
+train_wo_age <- subset(train, is.na(train$Age))
+
+test_w_age <- subset(test, !(is.na(test$Age)))
+test_wo_age <- subset(test, is.na(test$Age))
+
+
+#scatterplot3d(train$Pclass,train$Survived,train$Age)
+#abline(fit)
+#aggregate( train$Survived~ train$Pclass, train, sum)
+
+#table(train$Pclass,train$Survived, mean(train$Age))
+fit<-lm(Age~Pclass+Survived+SibSp,data= train_w_age)
+summary(fit)
+
+#fit2<-lm(Age~Pclass+Survived+SibSp,data= train_w_age)
+#summary(fit)
+
+
+train_wo_age$Age <- round(predict(fit,train_wo_age))
+
+test_wo_age$Age <- round(predict(fit,test_wo_age))
+
+
+
+
+updated_age<-merge(train_w_age,train_wo_age,all=TRUE)
+#upd_test<-merge(test_w_age,test_wo_age,all=TRUE)
+
+updated_test<-merge(test_w_age,test_wo_age,all=TRUE)
+
+updated_final<-merge(updated_age,updated_test,all=TRUE)
+
+
+View(updated_final)
+
+drops <- c("Name", "Ticket", "Cabin", "PassengerId")
+Cleansed_data<- updated_age[,!(names(updated_age) %in% drops)]
+
+Cleansed_data_final<- updated_final[,!(names(updated_final) %in% drops)]
+
+Cleansed<-dummy.data.frame(Cleansed_data,sep="_")
+
+#View(Cleansed)
+
+Cleansed_test_final<- dummy.data.frame(Cleansed_data_final,sep="_")
+Cleansed_test_final$Fare[is.na(Cleansed_test_final$Fare)]<-mean(Cleansed_test_final$Fare)
+
+
+#View(Cleansed_test_final)
+fitted <- randomForest(Survived ~ .-Survived, data = Cleansed_test_final[1:891,], nodesize = 25, ntree = 200)
+predicted_list<-predict(fitted, newdata = Cleansed_test_final[891:1309,])
+
+for (i in 1:418){
+  if (predicted_list[i] < 0.5)
+    predicted_list[i]=0
+  if (predicted_list[i] >= 0.5)
+    predicted_list[i]=1
+  if (is.na(predicted_list[i]))
+    predicted_list[i]=0
+  
+}
+
+
+```
